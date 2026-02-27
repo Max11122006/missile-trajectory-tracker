@@ -93,7 +93,11 @@ class Simulation:
     # ── physics update ─────────────────────────────────────────────────
     def update(self, dt: float):
         self.sim_time += dt
-        self.aircraft.update(dt)
+        # pass missile position so aircraft can evade
+        mpos = None
+        if self.missile and self.missile.alive:
+            mpos = self.missile.pos
+        self.aircraft.update(dt, missile_pos=mpos)
         if self.missile and self.missile.alive:
             self.missile.update(dt, self.aircraft.pos, self.aircraft.velocity)
 
