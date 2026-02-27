@@ -1,34 +1,37 @@
 # Missile Trajectory Tracker
 
-A physics-based missile tracking and trajectory animation system built with **Python + Pygame**. Simulates guided missiles following target coordinates with real-time trajectory visualization, ballistic calculations, and interactive targeting controls.
+A **ground-to-air intercept** simulation rendered in a **3-D graph space** using **Python + Pygame**. A guided interceptor missile tracks and attempts to intercept a manoeuvring aircraft using **proportional navigation** guidance.
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue?logo=python&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.9+-blue?logo=python&logoColor=white)
 ![Pygame](https://img.shields.io/badge/Pygame-2.5+-green?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
 ## Features
 
-- **Guided missile physics** – thrust, gravity, aerodynamic drag, and proportional-navigation guidance
-- **Real-time trajectory rendering** – fading trail lines showing the full flight path
-- **Particle effects** – smoke trails during thrust and explosions on impact
-- **Interactive targeting** – click anywhere to place/move the target crosshair
-- **HUD telemetry** – live speed, altitude, distance-to-target, fuel, and flight time
-- **Fuel system** – missile flies guided while fuel lasts, then follows a ballistic arc
+- **3-D graph space** – X (range), Y (lateral), Z (altitude) axes with grid and labels
+- **Moving aircraft target** – flies through the airspace with random heading and altitude changes
+- **Guided interceptor** – proportional navigation (PN) steers the missile toward the aircraft
+- **Orbiting camera** – click-drag to rotate, scroll to zoom
+- **Trail rendering** – fading 3-D paths for both aircraft and missile with ground shadows
+- **Closing line** – dashed line between missile and target during pursuit
+- **Telemetry panel** – live aircraft & missile telemetry, intercept status, camera info
+- **Light mode** – clean, professional light colour palette
 
 ## Controls
 
 | Key | Action |
 |-----|--------|
-| **Left Click** | Set / move target |
-| **Space** | Launch missile |
+| **Space** | Launch interceptor |
 | **R** | Reset simulation |
-| **ESC / Q** | Quit |
+| **Left Drag** | Orbit camera |
+| **Scroll** | Zoom in / out |
+| **ESC** | Quit |
 
 ## Getting Started
 
 ### Prerequisites
 
-- Python 3.10+
+- Python 3.9+
 - pip
 
 ### Installation
@@ -49,12 +52,12 @@ python main.py
 
 ```
 missile-trajectory-tracker/
-├── main.py          # Entry point – game loop & event handling
-├── missile.py       # Missile physics, guidance, and state
-├── target.py        # Target placement and state
-├── particles.py     # Particle system (smoke trails & explosions)
-├── renderer.py      # All Pygame drawing / HUD rendering
-├── config.py        # Constants (physics, display, colours)
+├── main.py          # Entry point – simulation loop & input handling
+├── missile.py       # Guided interceptor – proportional navigation
+├── aircraft.py      # Moving aircraft target with manoeuvres
+├── camera.py        # Orbiting camera & perspective projection
+├── renderer.py      # 3-D graph rendering – axes, grid, trails, panel
+├── config.py        # Constants (physics, display, colours, camera)
 ├── requirements.txt
 ├── LICENSE
 └── README.md
@@ -62,13 +65,13 @@ missile-trajectory-tracker/
 
 ## Physics Model
 
-The missile simulation uses:
+Ground-to-air intercept in 3-D space:
 
-- **Thrust** – constant forward acceleration along the missile heading while fuel remains
-- **Gravity** – downward acceleration (150 px/s²)
-- **Air drag** – quadratic drag opposing velocity
-- **Guidance** – rate-limited steering toward the target (proportional navigation)
-- **Ballistic phase** – once fuel is depleted, the missile follows a purely ballistic trajectory
+- **Aircraft** – constant-speed target with periodic heading and altitude manoeuvres
+- **Interceptor** – thrust-accelerated missile with gravity and quadratic drag
+- **Proportional navigation** – guidance law steers via line-of-sight rate × closing velocity
+- **Hit detection** – intercept when missile comes within 60 m of the aircraft
+- **3-D coordinates** – X (forward range), Y (lateral), Z (altitude) in metres
 
 ## License
 
