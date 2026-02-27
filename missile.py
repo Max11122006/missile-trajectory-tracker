@@ -1,4 +1,10 @@
-"""Missile physics and guidance system."""
+"""Missile physics and guidance system.
+
+Coordinate system (world):
+    x  – horizontal distance in metres (right is positive)
+    y  – altitude in metres (up is positive)
+    Gravity acts in the -y direction.
+"""
 
 from __future__ import annotations
 
@@ -10,10 +16,19 @@ class Missile:
     """A guided missile with thrust, gravity, drag, and proportional-navigation guidance."""
 
     def __init__(self, x: float, y: float, angle: float, speed: float):
+        """
+        Parameters
+        ----------
+        x, y : float
+            Launch position in metres.
+        angle : float
+            Launch angle in radians above the horizontal (positive = upward).
+        speed : float
+            Initial speed in m/s.
+        """
         self.x = x
         self.y = y
-        self.angle = angle  # radians, 0 = right, negative = up
-        self.speed = speed
+        self.angle = angle  # radians above horizontal
         self.vx = math.cos(angle) * speed
         self.vy = math.sin(angle) * speed
 
@@ -22,8 +37,8 @@ class Missile:
         self.reached_target = False
         self.time_alive = 0.0
 
-        # trajectory history for trail drawing
-        self.history: list[tuple[float, float]] = []
+        # trajectory history: list of (x, y) in world coords
+        self.history: list[tuple[float, float]] = [(x, y)]
 
     # ── helpers ───────────────────────────────────────────────────────────
     @property
@@ -34,18 +49,13 @@ class Missile:
     def velocity(self) -> float:
         return math.hypot(self.vx, self.vy)
 
-    @property
-    def altitude(self) -> float:
-        """Altitude above ground in pixels."""
-        return max(0.0, cfg.GROUND_Y - self.y)
-
     # ── guidance ──────────────────────────────────────────────────────────
     def _desired_angle(self, tx: float, ty: float) -> float:
-        """Angle from missile towards the target."""
+        """Angle from missile towards the target (radians, positive = up)."""
         return math.atan2(ty - self.y, tx - self.x)
 
     def _steer_towards(self, target_angle: float, dt: float) -> float:
-        """Return a new angle after steering towards *target_angle*."""
+        """Return a new angle after rate-limited steering."""
         diff = (target_angle - self.angle + math.pi) % (2 * math.pi) - math.pi
         max_turn = cfg.MISSILE_TURN_RATE * dt
         turn = max(-max_turn, min(max_turn, diff))
@@ -63,7 +73,7 @@ class Missile:
             desired = self._desired_angle(target_x, target_y)
             self.angle = self._steer_towards(desired, dt)
 
-        # Thrust
+        # Thrust (along heading)
         if self.fuel > 0:
             self.fuel -= dt
             ax = math.cos(self.angle) * cfg.MISSILE_THRUST
@@ -72,17 +82,15 @@ class Missile:
             ax = 0.0
             ay = 0.0
 
-        # Gravity (downward = positive y in screen coords)
-        ay += cfg.GRAVITY
+        # Gravity (pulls downward = negative y)
+        ay -= cfg.GRAVITY
 
-        # Drag  (opposes velocity)
+        # Drag (opposes velocity)
         speed = self.velocity
         if speed > 0:
             drag = cfg.AIR_DRAG * speed * speed
-            drag_ax = -self.vx / speed * drag
-            drag_ay = -self.vy / speed * drag
-            ax += drag_ax
-            ay += drag_ay
+            ax -= (self.vx / speed) * drag
+            ay -= (self.vy / speed) * drag
 
         # Integrate
         self.vx += ax * dt
@@ -98,27 +106,28 @@ class Missile:
         self.x += self.vx * dt
         self.y += self.vy * dt
 
-        # Update angle to match velocity when out of fuel (ballistic)
+        # Update heading to match velocity when ballistic
         if self.fuel <= 0 and speed > 1:
             self.angle = math.atan2(self.vy, self.vx)
 
         # Store history
         self.history.append((self.x, self.y))
-        if len(self.history) > 3000:
+        if len(self.history) > 5000:
             self.history.pop(0)
 
-        # Ground collision
-        if self.y >= cfg.GROUND_Y:
+        # Ground collision (y <= 0)
+        if self.y <= cfg.GROUND_Y:
             self.y = cfg.GROUND_Y
             self.alive = False
 
-        # Off-screen
-        if (self.x < -100 or self.x > cfg.SCREEN_WIDTH + 100
-                or self.y < -500):
+        # Out of world bounds
+        if (self.x < cfg.WORLD_X_MIN - 200
+                or self.x > cfg.WORLD_X_MAX + 200
+                or self.y > cfg.WORLD_Y_MAX + 500):
             self.alive = False
 
-        # Target proximity
+        # Target proximity (hit detection – within 50 m)
         dist = math.hypot(self.x - target_x, self.y - target_y)
-        if dist < cfg.TARGET_RADIUS + 4:
+        if dist < 50:
             self.reached_target = True
             self.alive = False

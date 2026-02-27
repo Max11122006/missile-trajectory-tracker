@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Missile Trajectory Tracker – main entry point.
 
-A physics-based missile tracking and trajectory animation system.
-Click to place a target, press SPACE to launch, and watch the guided
-missile navigate with realistic physics.
+A physics-based missile tracking and trajectory visualisation system
+rendered as a professional scientific graph.
 
 Controls:
-    LEFT CLICK   – Set / move target
+    LEFT CLICK   – Set / move target (click inside the graph area)
     SPACE        – Launch missile
     R            – Reset simulation
     ESC / Q      – Quit
@@ -14,8 +13,6 @@ Controls:
 
 from __future__ import annotations
 
-import math
-import random
 import sys
 
 import pygame
@@ -23,31 +20,23 @@ import pygame
 import config as cfg
 from missile import Missile
 from target import Target
-from particles import ParticleSystem
 from renderer import (
+    screen_to_world,
     draw_background,
-    draw_stars,
-    draw_launcher,
+    draw_grid,
+    draw_ground,
+    draw_origin,
+    draw_target,
     draw_missile,
     draw_trajectory,
-    draw_target,
-    draw_particles,
-    draw_hud,
+    draw_impact,
+    draw_title,
+    draw_panel,
 )
 
 
-def generate_stars(count: int = 200) -> list[tuple[int, int, int]]:
-    """Pre-generate random starfield positions."""
-    return [
-        (random.randint(0, cfg.SCREEN_WIDTH),
-         random.randint(0, cfg.GROUND_Y - 1),
-         random.randint(120, 255))
-        for _ in range(count)
-    ]
-
-
-class Game:
-    """Top-level game state and loop."""
+class Simulation:
+    """Top-level simulation state and loop."""
 
     def __init__(self):
         pygame.init()
@@ -55,40 +44,37 @@ class Game:
             (cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT))
         pygame.display.set_caption(cfg.TITLE)
         self.clock = pygame.time.Clock()
-        self.font = pygame.font.SysFont("consolas", cfg.HUD_FONT_SIZE)
 
-        self.stars = generate_stars()
+        # fonts
+        self.title_font = pygame.font.SysFont("consolas", cfg.FONT_TITLE, bold=True)
+        self.axis_font = pygame.font.SysFont("consolas", cfg.FONT_AXIS)
+        self.label_font = pygame.font.SysFont("consolas", cfg.FONT_LABEL)
+        self.value_font = pygame.font.SysFont("consolas", cfg.FONT_VALUE)
+
+        self.sim_time = 0.0
         self.reset()
 
     def reset(self):
         """Reset the simulation state."""
-        self.target = Target(cfg.SCREEN_WIDTH * 0.75, cfg.GROUND_Y - 60)
+        self.target = Target(cfg.DEFAULT_TARGET_X, cfg.DEFAULT_TARGET_Y)
         self.missile: Missile | None = None
-        self.particles = ParticleSystem()
         self.missiles_fired = 0
-        self.bg_cache: pygame.Surface | None = None
-
-    def _cache_background(self):
-        """Pre-render the static background to avoid per-frame gradient loops."""
-        if self.bg_cache is None:
-            self.bg_cache = pygame.Surface(
-                (cfg.SCREEN_WIDTH, cfg.SCREEN_HEIGHT))
-            draw_background(self.bg_cache)
-            draw_stars(self.bg_cache, self.stars)
+        self.sim_time = 0.0
 
     def launch(self):
-        """Launch a new missile from the launcher."""
-        lx, ly = cfg.LAUNCHER_POS
-        self.missile = Missile(lx, ly, cfg.LAUNCH_ANGLE, cfg.LAUNCH_SPEED)
-        self.particles.clear()
+        """Launch a new missile from the configured origin."""
+        self.missile = Missile(
+            cfg.LAUNCH_X, cfg.LAUNCH_Y,
+            cfg.LAUNCH_ANGLE, cfg.LAUNCH_SPEED)
         self.missiles_fired += 1
 
-    # ── event handling ────────────────────────────────────────────────────
+    # ── events ────────────────────────────────────────────────────────────
     def handle_events(self) -> bool:
-        """Process input. Return False to quit."""
+        """Process input. Returns False to quit."""
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 return False
+
             if event.type == pygame.KEYDOWN:
                 if event.key in (pygame.K_ESCAPE, pygame.K_q):
                     return False
@@ -96,47 +82,42 @@ class Game:
                     self.launch()
                 if event.key == pygame.K_r:
                     self.reset()
+
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mx, my = event.pos
-                self.target.set(mx, my)
+                # only accept clicks inside the graph area
+                if (cfg.GRAPH_LEFT <= mx <= cfg.GRAPH_RIGHT
+                        and cfg.GRAPH_TOP <= my <= cfg.GRAPH_BOTTOM):
+                    wx, wy = screen_to_world(mx, my)
+                    self.target.set(wx, wy)
+
         return True
 
     # ── update ────────────────────────────────────────────────────────────
     def update(self, dt: float):
+        self.sim_time += dt
         self.target.update(dt)
 
         if self.missile and self.missile.alive:
             self.missile.update(dt, self.target.x, self.target.y)
 
-            # emit trail particles while thrusting
-            if self.missile.fuel > 0:
-                self.particles.emit_trail(
-                    self.missile.x, self.missile.y,
-                    self.missile.angle, dt)
-
-            # check if just died this frame
-            if not self.missile.alive:
-                self.particles.emit_explosion(
-                    self.missile.x, self.missile.y,
-                    hit=self.missile.reached_target)
-
-        self.particles.update(dt)
-
     # ── draw ──────────────────────────────────────────────────────────────
     def draw(self):
-        self._cache_background()
-        self.screen.blit(self.bg_cache, (0, 0))
-
-        draw_launcher(self.screen)
-        draw_target(self.screen, self.target)
+        draw_background(self.screen)
+        draw_grid(self.screen, self.axis_font)
+        draw_ground(self.screen)
+        draw_title(self.screen, self.title_font)
+        draw_origin(self.screen)
+        draw_target(self.screen, self.target, self.sim_time)
 
         if self.missile:
             draw_trajectory(self.screen, self.missile.history)
             draw_missile(self.screen, self.missile)
+            draw_impact(self.screen, self.missile)
 
-        draw_particles(self.screen, self.particles)
-        draw_hud(self.screen, self.font, self.missile,
-                 self.target, self.missiles_fired)
+        draw_panel(self.screen, self.label_font, self.value_font,
+                   self.missile, self.target,
+                   self.missiles_fired, self.sim_time)
 
         pygame.display.flip()
 
@@ -145,7 +126,7 @@ class Game:
         running = True
         while running:
             dt = self.clock.tick(cfg.FPS) / 1000.0
-            dt = min(dt, 0.05)  # cap delta to avoid spiral of death
+            dt = min(dt, 0.05)  # cap delta time
 
             running = self.handle_events()
             self.update(dt)
@@ -156,4 +137,4 @@ class Game:
 
 
 if __name__ == "__main__":
-    Game().run()
+    Simulation().run()

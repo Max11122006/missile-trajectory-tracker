@@ -1,4 +1,4 @@
-"""Rendering helpers – draws all visual elements onto the Pygame surface."""
+"""Rendering helpers – scientific graph-style visualisation."""
 
 from __future__ import annotations
 
@@ -7,157 +7,265 @@ import pygame
 import config as cfg
 from missile import Missile
 from target import Target
-from particles import ParticleSystem
 
+
+# ── coordinate transforms ────────────────────────────────────────────────────
+
+def world_to_screen(wx: float, wy: float) -> tuple[int, int]:
+    """Convert world coordinates (metres) to screen pixel coordinates.
+    World: x = horizontal distance, y = altitude (up is positive).
+    Screen: standard pygame (0,0 top-left, y increases downward).
+    """
+    sx = cfg.GRAPH_LEFT + (wx - cfg.WORLD_X_MIN) / (cfg.WORLD_X_MAX - cfg.WORLD_X_MIN) * cfg.GRAPH_W
+    sy = cfg.GRAPH_BOTTOM - (wy - cfg.WORLD_Y_MIN) / (cfg.WORLD_Y_MAX - cfg.WORLD_Y_MIN) * cfg.GRAPH_H
+    return (int(sx), int(sy))
+
+
+def screen_to_world(sx: int, sy: int) -> tuple[float, float]:
+    """Convert screen pixels back to world coordinates."""
+    wx = cfg.WORLD_X_MIN + (sx - cfg.GRAPH_LEFT) / cfg.GRAPH_W * (cfg.WORLD_X_MAX - cfg.WORLD_X_MIN)
+    wy = cfg.WORLD_Y_MIN + (cfg.GRAPH_BOTTOM - sy) / cfg.GRAPH_H * (cfg.WORLD_Y_MAX - cfg.WORLD_Y_MIN)
+    return (wx, wy)
+
+
+# ── background & grid ────────────────────────────────────────────────────────
 
 def draw_background(surface: pygame.Surface):
-    """Gradient sky + ground."""
-    # Sky gradient (top → horizon)
-    for y in range(cfg.GROUND_Y):
-        t = y / cfg.GROUND_Y
-        r = int(cfg.DARK_BLUE[0] * (1 - t) + 30 * t)
-        g = int(cfg.DARK_BLUE[1] * (1 - t) + 30 * t)
-        b = int(cfg.DARK_BLUE[2] * (1 - t) + 60 * t)
-        pygame.draw.line(surface, (r, g, b), (0, y), (cfg.SCREEN_WIDTH, y))
-
-    # Ground
-    pygame.draw.rect(surface, (30, 70, 30),
-                     (0, cfg.GROUND_Y, cfg.SCREEN_WIDTH,
-                      cfg.SCREEN_HEIGHT - cfg.GROUND_Y))
-    pygame.draw.line(surface, (50, 110, 50),
-                     (0, cfg.GROUND_Y), (cfg.SCREEN_WIDTH, cfg.GROUND_Y), 2)
+    """Dark background with graph plotting area."""
+    surface.fill(cfg.BG)
+    pygame.draw.rect(surface, cfg.GRAPH_BG,
+                     (cfg.GRAPH_LEFT, cfg.GRAPH_TOP, cfg.GRAPH_W, cfg.GRAPH_H))
 
 
-def draw_stars(surface: pygame.Surface, stars: list[tuple[int, int, int]]):
-    """Draw pre-generated starfield."""
-    for sx, sy, brightness in stars:
-        if sy < cfg.GROUND_Y:
-            colour = (brightness, brightness, brightness)
-            surface.set_at((sx, sy), colour)
+def draw_grid(surface: pygame.Surface, axis_font: pygame.font.Font):
+    """Draw coordinate grid lines with axis labels."""
+    # ── vertical grid lines (X axis) ──
+    x = cfg.WORLD_X_MIN
+    while x <= cfg.WORLD_X_MAX:
+        sx, _ = world_to_screen(x, 0)
+        is_major = (x % (cfg.GRID_X_STEP * 2) == 0) or x == 0
+        colour = cfg.GRID_COLOUR_MAJOR if is_major else cfg.GRID_COLOUR
+        pygame.draw.line(surface, colour, (sx, cfg.GRAPH_TOP), (sx, cfg.GRAPH_BOTTOM), 1)
+        label = axis_font.render(f"{int(x)}", True, cfg.LABEL_COLOUR)
+        surface.blit(label, (sx - label.get_width() // 2, cfg.GRAPH_BOTTOM + 6))
+        x += cfg.GRID_X_STEP
+
+    # ── horizontal grid lines (Y axis / altitude) ──
+    y = cfg.WORLD_Y_MIN
+    while y <= cfg.WORLD_Y_MAX:
+        _, sy = world_to_screen(0, y)
+        is_major = (y % (cfg.GRID_Y_STEP * 2) == 0) or y == 0
+        colour = cfg.GRID_COLOUR_MAJOR if is_major else cfg.GRID_COLOUR
+        pygame.draw.line(surface, colour, (cfg.GRAPH_LEFT, sy), (cfg.GRAPH_RIGHT, sy), 1)
+        label = axis_font.render(f"{int(y)}", True, cfg.LABEL_COLOUR)
+        surface.blit(label, (cfg.GRAPH_LEFT - label.get_width() - 8, sy - label.get_height() // 2))
+        y += cfg.GRID_Y_STEP
+
+    # ── axes border ──
+    pygame.draw.rect(surface, cfg.AXIS_COLOUR,
+                     (cfg.GRAPH_LEFT, cfg.GRAPH_TOP, cfg.GRAPH_W, cfg.GRAPH_H), 1)
+
+    # ── axis titles ──
+    x_title = axis_font.render("Distance (m)", True, cfg.LABEL_COLOUR)
+    surface.blit(x_title, (cfg.GRAPH_LEFT + cfg.GRAPH_W // 2 - x_title.get_width() // 2,
+                            cfg.GRAPH_BOTTOM + 24))
+
+    y_title = axis_font.render("Altitude (m)", True, cfg.LABEL_COLOUR)
+    y_title_rot = pygame.transform.rotate(y_title, 90)
+    surface.blit(y_title_rot, (cfg.GRAPH_LEFT - 60,
+                                cfg.GRAPH_TOP + cfg.GRAPH_H // 2 - y_title_rot.get_height() // 2))
 
 
-def draw_launcher(surface: pygame.Surface):
-    """Draw the missile launcher at the bottom-left."""
-    lx, ly = cfg.LAUNCHER_POS
-    # base
-    pygame.draw.rect(surface, cfg.GREY, (lx - 15, ly - 5, 30, 20))
-    # barrel
-    end_x = lx + math.cos(cfg.LAUNCH_ANGLE) * 35
-    end_y = ly + math.sin(cfg.LAUNCH_ANGLE) * 35
-    pygame.draw.line(surface, cfg.WHITE, (lx, ly), (end_x, end_y), 4)
-    # platform
-    pygame.draw.rect(surface, cfg.DARK_GREY, (lx - 20, ly + 10, 40, 8))
+# ── ground line ──────────────────────────────────────────────────────────────
 
+def draw_ground(surface: pygame.Surface):
+    """Draw the ground level line at y=0."""
+    _, gy = world_to_screen(0, 0)
+    if cfg.GRAPH_TOP <= gy <= cfg.GRAPH_BOTTOM:
+        pygame.draw.line(surface, (50, 70, 50),
+                         (cfg.GRAPH_LEFT, gy), (cfg.GRAPH_RIGHT, gy), 2)
+
+
+# ── origin / launch marker ──────────────────────────────────────────────────
+
+def draw_origin(surface: pygame.Surface):
+    """Small marker at the launch position."""
+    sx, sy = world_to_screen(cfg.LAUNCH_X, cfg.LAUNCH_Y)
+    pygame.draw.circle(surface, cfg.ORIGIN_COLOUR, (sx, sy), 5, 2)
+    ang = cfg.LAUNCH_ANGLE
+    length = 30
+    ex = sx + math.cos(ang) * length
+    ey = sy - math.sin(ang) * length
+    pygame.draw.line(surface, cfg.ORIGIN_COLOUR, (sx, sy), (int(ex), int(ey)), 1)
+
+
+# ── target ───────────────────────────────────────────────────────────────────
+
+def draw_target(surface: pygame.Surface, target: Target, time: float):
+    """Draw the target as a small blue dot with a subtle ring."""
+    if not target.active:
+        return
+    sx, sy = world_to_screen(target.x, target.y)
+    pygame.draw.circle(surface, cfg.TARGET_COLOUR, (sx, sy), cfg.TARGET_RADIUS)
+    ring_r = cfg.TARGET_RADIUS + 5 + int(2 * math.sin(time * 2.5))
+    pygame.draw.circle(surface, cfg.TARGET_RING, (sx, sy), ring_r, 1)
+
+    label_font = pygame.font.SysFont("consolas", 11)
+    coord_text = f"({target.x:.0f}, {target.y:.0f})"
+    label = label_font.render(coord_text, True, cfg.TARGET_COLOUR)
+    surface.blit(label, (sx + cfg.TARGET_RADIUS + 6, sy - 6))
+
+
+# ── missile ──────────────────────────────────────────────────────────────────
 
 def draw_missile(surface: pygame.Surface, m: Missile):
-    """Draw the missile body as a rotated shape."""
+    """Draw the missile as a small red dot with a velocity vector."""
     if not m.alive:
         return
+    sx, sy = world_to_screen(m.x, m.y)
+    pygame.draw.circle(surface, cfg.MISSILE_COLOUR, (sx, sy), 5)
+    # velocity vector
+    scale = 0.15
+    vx_s = m.vx * scale
+    vy_s = -m.vy * scale  # invert for screen
+    end_x = sx + vx_s
+    end_y = sy + vy_s
+    pygame.draw.line(surface, cfg.VELOCITY_VEC, (sx, sy), (int(end_x), int(end_y)), 1)
 
-    cos_a = math.cos(m.angle)
-    sin_a = math.sin(m.angle)
-    L = cfg.MISSILE_LENGTH
-    W = cfg.MISSILE_WIDTH
 
-    # nose
-    nose = (m.x + cos_a * L, m.y + sin_a * L)
-    # left / right tail
-    perp_x, perp_y = -sin_a, cos_a
-    tail_l = (m.x - cos_a * L * 0.3 + perp_x * W,
-              m.y - sin_a * L * 0.3 + perp_y * W)
-    tail_r = (m.x - cos_a * L * 0.3 - perp_x * W,
-              m.y - sin_a * L * 0.3 - perp_y * W)
-
-    # body
-    pygame.draw.polygon(surface, cfg.WHITE, [nose, tail_l, tail_r])
-
-    # flame when thrusting
-    if m.fuel > 0:
-        flame_len = 10 + 6 * math.sin(m.time_alive * 30)
-        flame_tip = (m.x - cos_a * (L * 0.3 + flame_len),
-                     m.y - sin_a * (L * 0.3 + flame_len))
-        pygame.draw.polygon(surface, cfg.ORANGE,
-                            [tail_l, tail_r, flame_tip])
-
+# ── trajectory ───────────────────────────────────────────────────────────────
 
 def draw_trajectory(surface: pygame.Surface, history: list[tuple[float, float]]):
-    """Draw the trajectory path as a fading line."""
+    """Draw the flight path as a gradient line on the graph."""
     n = len(history)
     if n < 2:
         return
     for i in range(1, n):
         t = i / n
-        alpha = int(180 * t)
-        colour = (alpha, alpha // 2, alpha // 4)
-        pygame.draw.line(surface, colour, history[i - 1], history[i], 1)
+        r = int(cfg.MISSILE_TRAIL_FADE[0] + (cfg.MISSILE_TRAIL[0] - cfg.MISSILE_TRAIL_FADE[0]) * t)
+        g = int(cfg.MISSILE_TRAIL_FADE[1] + (cfg.MISSILE_TRAIL[1] - cfg.MISSILE_TRAIL_FADE[1]) * t)
+        b = int(cfg.MISSILE_TRAIL_FADE[2] + (cfg.MISSILE_TRAIL[2] - cfg.MISSILE_TRAIL_FADE[2]) * t)
+        p1 = world_to_screen(*history[i - 1])
+        p2 = world_to_screen(*history[i])
+        pygame.draw.line(surface, (r, g, b), p1, p2, 2 if t > 0.8 else 1)
 
 
-def draw_target(surface: pygame.Surface, target: Target):
-    """Draw the target crosshair."""
-    if not target.active:
+# ── impact marker ────────────────────────────────────────────────────────────
+
+def draw_impact(surface: pygame.Surface, m: Missile):
+    """Draw an X at the impact point after the missile dies."""
+    if m.alive:
         return
-    x, y = int(target.x), int(target.y)
-    pulse = 1.0 + 0.2 * math.sin(target.pulse)
-    r1 = int(cfg.TARGET_RADIUS * pulse)
-    r2 = int(cfg.TARGET_RING_RADIUS * pulse)
+    sx, sy = world_to_screen(m.x, m.y)
+    size = 8
+    colour = cfg.TEXT_OK if m.reached_target else cfg.IMPACT_COLOUR
+    pygame.draw.line(surface, colour, (sx - size, sy - size), (sx + size, sy + size), 2)
+    pygame.draw.line(surface, colour, (sx - size, sy + size), (sx + size, sy - size), 2)
 
-    pygame.draw.circle(surface, cfg.RED, (x, y), r2, 2)
-    pygame.draw.circle(surface, cfg.RED, (x, y), r1, 2)
-    # crosshair lines
-    gap = r1 - 3
-    line_len = r2 + 6
-    pygame.draw.line(surface, cfg.RED, (x - line_len, y), (x - gap, y), 1)
-    pygame.draw.line(surface, cfg.RED, (x + gap, y), (x + line_len, y), 1)
-    pygame.draw.line(surface, cfg.RED, (x, y - line_len), (x, y - gap), 1)
-    pygame.draw.line(surface, cfg.RED, (x, y + gap), (x, y + line_len), 1)
+    font = pygame.font.SysFont("consolas", 11)
+    status = "HIT" if m.reached_target else "IMPACT"
+    label = font.render(f"{status} ({m.x:.0f}, {m.y:.0f})", True, colour)
+    surface.blit(label, (sx + 12, sy - 6))
 
 
-def draw_particles(surface: pygame.Surface, psys: ParticleSystem):
-    """Draw all particles with alpha fade."""
-    for p in psys.particles:
-        alpha = p.alpha
-        r = int(p.colour[0] * alpha)
-        g = int(p.colour[1] * alpha)
-        b = int(p.colour[2] * alpha)
-        size = max(1, int(p.size * alpha))
-        pygame.draw.circle(surface, (r, g, b), (int(p.x), int(p.y)), size)
+# ── title ────────────────────────────────────────────────────────────────────
+
+def draw_title(surface: pygame.Surface, title_font: pygame.font.Font):
+    """Draw the title above the graph."""
+    title = title_font.render(cfg.TITLE, True, cfg.TITLE_COLOUR)
+    surface.blit(title, (cfg.GRAPH_LEFT, cfg.GRAPH_TOP - 34))
 
 
-def draw_hud(surface: pygame.Surface, font: pygame.font.Font,
-             missile: Missile | None, target: Target, missiles_fired: int):
-    """Draw the heads-up display with telemetry."""
-    pad = cfg.HUD_PADDING
-    y = pad
-    lines: list[str] = []
+# ── telemetry panel ──────────────────────────────────────────────────────────
 
-    lines.append(f"Missiles Fired: {missiles_fired}")
+def draw_panel(surface: pygame.Surface,
+               label_font: pygame.font.Font,
+               value_font: pygame.font.Font,
+               missile: Missile | None,
+               target: Target,
+               missiles_fired: int,
+               sim_time: float):
+    """Draw the right-side telemetry data panel."""
+    px = cfg.PANEL_X
+    py = cfg.PANEL_Y
+    pw = cfg.PANEL_W
+    ph = cfg.PANEL_H
 
+    pygame.draw.rect(surface, cfg.PANEL_BG, (px, py, pw, ph))
+    pygame.draw.rect(surface, cfg.PANEL_BORDER, (px, py, pw, ph), 1)
+
+    row_y = py + 14
+    line_h = 22
+
+    def _section(title: str):
+        nonlocal row_y
+        row_y += 6
+        rendered = label_font.render(f"── {title} ──", True, cfg.TEXT_ACCENT)
+        surface.blit(rendered, (px + 10, row_y))
+        row_y += line_h
+
+    def _row(label: str, value: str, colour=cfg.TEXT_VALUE):
+        nonlocal row_y
+        lbl = label_font.render(label, True, cfg.TEXT_LABEL)
+        val = value_font.render(value, True, colour)
+        surface.blit(lbl, (px + 12, row_y))
+        surface.blit(val, (px + pw - val.get_width() - 12, row_y))
+        row_y += line_h
+
+    _section("SIMULATION")
+    _row("Launches:", str(missiles_fired))
+    _row("Sim Time:", f"{sim_time:.1f} s")
+
+    _section("TARGET")
+    _row("X:", f"{target.x:.0f} m")
+    _row("Y:", f"{target.y:.0f} m")
+
+    _section("MISSILE")
     if missile and missile.alive:
         spd = missile.velocity
-        alt = missile.altitude
         dist = math.hypot(missile.x - target.x, missile.y - target.y)
         fuel_pct = max(0, missile.fuel / cfg.MISSILE_FUEL_TIME * 100)
-        lines.append(f"Speed: {spd:.0f} px/s")
-        lines.append(f"Altitude: {alt:.0f} px")
-        lines.append(f"Distance to Target: {dist:.0f} px")
-        lines.append(f"Fuel: {fuel_pct:.0f}%")
-        lines.append(f"Time: {missile.time_alive:.1f}s")
-    elif missile and not missile.alive:
-        if missile.reached_target:
-            lines.append("STATUS: TARGET HIT!")
+        angle_deg = math.degrees(missile.angle)
+
+        _row("Position:", f"({missile.x:.0f}, {missile.y:.0f})")
+        _row("Speed:", f"{spd:.1f} m/s")
+        _row("Altitude:", f"{missile.y:.0f} m")
+        _row("Heading:", f"{angle_deg:.1f}\u00b0")
+        _row("Dist to Tgt:", f"{dist:.0f} m")
+        _row("Fuel:", f"{fuel_pct:.0f}%",
+             cfg.TEXT_WARN if fuel_pct < 20 else cfg.TEXT_VALUE)
+        _row("Flight Time:", f"{missile.time_alive:.1f} s")
+
+        _section("STATUS")
+        if fuel_pct > 0:
+            _row("Phase:", "GUIDED", cfg.TEXT_OK)
         else:
-            lines.append("STATUS: MISSILE LOST")
+            _row("Phase:", "BALLISTIC", cfg.TEXT_WARN)
 
-    for i, text in enumerate(lines):
-        rendered = font.render(text, True, cfg.CYAN)
-        surface.blit(rendered, (pad, y + i * (cfg.HUD_FONT_SIZE + 4)))
+    elif missile and not missile.alive:
+        _row("Position:", f"({missile.x:.0f}, {missile.y:.0f})")
+        _row("Flight Time:", f"{missile.time_alive:.1f} s")
+        _section("STATUS")
+        if missile.reached_target:
+            _row("Result:", "TARGET HIT", cfg.TEXT_OK)
+        else:
+            _row("Result:", "MISS", cfg.TEXT_WARN)
+        dist = math.hypot(missile.x - target.x, missile.y - target.y)
+        _row("Miss Dist:", f"{dist:.0f} m")
+    else:
+        _row("Status:", "AWAITING LAUNCH", cfg.TEXT_LABEL)
 
-    # Instructions at bottom
+    # ── instructions at bottom of panel ──
+    row_y = py + ph - 90
+    _section("CONTROLS")
+    inst_font = pygame.font.SysFont("consolas", 10)
     instructions = [
-        "LEFT CLICK: Set target  |  SPACE: Launch missile  |  R: Reset  |  ESC: Quit"
+        "CLICK   Set target",
+        "SPACE   Launch missile",
+        "R       Reset",
+        "ESC     Quit",
     ]
-    for i, text in enumerate(instructions):
-        rendered = font.render(text, True, cfg.LIGHT_BLUE)
-        rect = rendered.get_rect(centerx=cfg.SCREEN_WIDTH // 2,
-                                 y=cfg.SCREEN_HEIGHT - 28 + i * 18)
-        surface.blit(rendered, rect)
+    for text in instructions:
+        rendered = inst_font.render(text, True, cfg.TEXT_LABEL)
+        surface.blit(rendered, (px + 14, row_y))
+        row_y += 15
